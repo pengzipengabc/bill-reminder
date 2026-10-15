@@ -1,10 +1,11 @@
+import {setupMailbox} from './mailbox.js';
 import {setupReminders} from './reminders.js';
 import {BANKS,dateKey,validMonth,daysUntil,amountToCents,validateBill,duplicateKey,parseStatement,makeCalendar,latestBills} from './core.js';
 function newId(){if(globalThis.crypto?.randomUUID)return crypto.randomUUID();const a=new Uint8Array(16);crypto.getRandomValues(a);return [...a].map(v=>v.toString(16).padStart(2,'0')).join('');}
 const $=id=>document.getElementById(id),KEY='bill-reminder-public-v1';
 const money=n=>(n/100).toLocaleString('zh-CN',{minimumFractionDigits:2,maximumFractionDigits:2});
 const esc=s=>String(s).replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
-let reminderUI;
+let reminderUI,mailboxUI;
 let bills=[],demo=false,demoBills=[],filter='all',editing=null,hiddenAmounts=false,toastTimer,storageReadFailed=false,latestMode=true;
 function toast(s){$('toast').textContent=s;$('toast').classList.add('show');clearTimeout(toastTimer);toastTimer=setTimeout(()=>$('toast').classList.remove('show'),4500);}
 try{const raw=localStorage.getItem(KEY);if(raw){const data=JSON.parse(raw);if(!Array.isArray(data)||!data.every(validateBill))throw Error();bills=data;}}catch{storageReadFailed=true;toast('本机数据读取失败，已停止写入以保护原数据。请先导出原始备份。');}
@@ -33,6 +34,7 @@ function render(){
 }
 function openImport(){if(demo){toast('已退出示例模式，接下来保存的是真实账单。');demo=false;render();}$('importDialog').showModal();}
 function openEditor(values={},isEdit=false){
+ $('mailboxReview').hidden=true;$('mailboxReviewText').textContent='';
  $('billForm').reset();editing=isEdit?values.id:null;
  $('editTitle').textContent=isEdit?'编辑账单':values.warnings?'核对识别结果':'手动记录账单';
  $('bankInput').value=values.bank||'';$('tailInput').value=values.tail||'';$('periodInput').value=values.period||'';
@@ -77,7 +79,7 @@ document.querySelectorAll('nav button').forEach(b=>b.onclick=()=>showView(b.data
 document.querySelectorAll('[data-close]').forEach(b=>b.onclick=()=>b.closest('dialog').close());
 document.querySelectorAll('[data-filter]').forEach(b=>b.onclick=()=>{filter=b.dataset.filter;document.querySelectorAll('[data-filter]').forEach(x=>x.classList.toggle('selected',x===b));render();});
 $('privacyButton').onclick=()=>{hiddenAmounts=!hiddenAmounts;$('privacyButton').textContent=hiddenAmounts?'显示金额':'隐藏金额';render();};
-$('helpButton').onclick=()=>$('helpDialog').showModal();$('importButton').onclick=openImport;$('emptyImport').onclick=openImport;
+$('helpButton').onclick=()=>$('helpDialog').showModal();$('importButton').onclick=()=>mailboxUI.open();$('emptyImport').onclick=()=>mailboxUI.open();
 $('manualButton').onclick=()=>{if(demo){demo=false;render();}openEditor({period:$('month').value});};
 $('parseButton').onclick=()=>{const text=$('statementText').value.trim();if(!text)return toast('请先粘贴账单文字或选择文件。');$('importDialog').close();openEditor(parseStatement(text));};
 $('statementFile').onchange=async e=>{const file=e.target.files[0];if(!file)return;try{if(file.size>2*1024*1024)throw Error('文件超过 2MB，请复制需要的账单正文。');const ext=file.name.split('.').pop().toLowerCase();if(!['txt','html','htm','eml'].includes(ext))throw Error('请选择 TXT、HTML 或 EML 文件。');const raw=await file.text();const text=ext==='eml'?mimeText(raw):['html','htm'].includes(ext)?htmlToText(raw):raw;if(text.length>200000)throw Error('正文过长，请只复制当前账单部分。');if(!text.trim())throw Error('未找到文字正文，请手动填写。');$('statementText').value=text;toast('文件已读入，请点击“识别并核对”。');}catch(error){toast(error.message||'文件读取失败，请复制正文。');}finally{e.target.value='';}};
@@ -98,6 +100,7 @@ $('restoreButton').onclick=()=>$('backupFile').click();
 $('backupFile').onchange=async e=>{const f=e.target.files[0];if(!f)return;try{if(f.size>5*1024*1024)throw Error('备份超过 5MB，无法导入。');const data=JSON.parse(await f.text());if(data.format!=='card-ledger'||data.version!==1||!Array.isArray(data.bills)||data.bills.length>10000||!data.bills.every(validateBill))throw Error('备份格式无效，未修改现有数据。');const map=new Map(bills.map(b=>[duplicateKey(b),b]));const conflicts=data.bills.filter(b=>map.has(duplicateKey(b))).length;if(!await ask(`将合并 ${data.bills.length} 份账单。同卡同月的 ${conflicts} 份记录保留本机版本。继续恢复？`))return;for(const b of data.bills)if(!map.has(duplicateKey(b)))map.set(duplicateKey(b),{...b,id:newId()});if(persist([...map.values()])){demo=false;render();toast('备份已合并恢复。');}}catch(error){toast(error.message||'备份读取失败。');}finally{e.target.value='';}};
 $('clearButton').onclick=async()=>{if(bills.length===0)return toast('本机没有真实账单。');if(await ask(`清空本机 ${bills.length} 份真实账单？建议先导出备份。此操作无法撤销。`)&&persist([])){render();toast('本机真实账单已清空。');}};
 $('latestButton').onclick=()=>setMode(true);$('periodButton').onclick=()=>setMode(false);
+mailboxUI=setupMailbox({openEditor,openManualImport:openImport,toast,esc});
 reminderUI=setupReminders({getBills:source,download,toast,esc,isDemo:()=>demo});
 if('serviceWorker'in navigator)navigator.serviceWorker.register('./reminder-sw.js',{scope:'./'}).catch(()=>{});
 render();
